@@ -14,20 +14,26 @@ class IOGPIODPi : public IOBase
   void tx(bool tms, bool tdi);
   bool txrx(bool tms, bool tdi);
 
-  void txrx_block(const unsigned char *tdi, unsigned char *tdo, int length, bool last);
-  void tx_tms(unsigned char *pat, int length, int force);
+  void txrx_block(const unsigned char *tdi, unsigned char *tdo, int length, bool last) override;
+  void tx_tms(unsigned char *pat, int length, int force) override;
 
   int TMSPin;
   int TCKPin;
   int TDIPin;
   int TDOPin;
-  
-  private:
-    struct gpiod_chip *chip;
-    struct gpiod_line *TMSline;
-    struct gpiod_line *TCKline;
-    struct gpiod_line *TDIline;
-    struct gpiod_line *TDOline;
+
+ private:
+  struct gpiod_chip *chip = nullptr;
+  struct gpiod_line_request *req = nullptr;
+
+  inline void set_line(int offset, bool value) {
+    gpiod_line_request_set_value(req, (unsigned int)offset,
+      value ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE);
+  }
+
+  inline bool get_line(int offset) {
+    return gpiod_line_request_get_value(req, (unsigned int)offset) == GPIOD_LINE_VALUE_ACTIVE;
+  }
 };
 
 #endif
