@@ -1,80 +1,112 @@
-#include <iogpiodpi.h>
+#include "iogpiodpi.h"
 #include <iostream>
-
 
 IOGPIODPi::IOGPIODPi(int tms, int tck, int tdi, int tdo)
  : TMSPin(tms), TCKPin(tck), TDIPin(tdi), TDOPin(tdo)
 {
-    chip = gpiod_chip_open_by_name("gpiochip0"); 
+    chip = NULL;
+    TMSreq = NULL;
+    TCKreq = NULL;
+    TDIreq = NULL;
+    TDOreq = NULL;
 
+    chip = gpiod_chip_open("/dev/gpiochip0");
     if (!chip) {
-    perror("Open chip failed");
+        perror("Open chip failed");
+        return;
     }
 
-    TMSline = gpiod_chip_get_line(chip, TMSPin);
-    TCKline = gpiod_chip_get_line(chip, TCKPin);
-    TDIline = gpiod_chip_get_line(chip, TDIPin);
-    TDOline = gpiod_chip_get_line(chip, TDOPin);
-
-    if (!TMSline) {
-        perror("TMSline line config failed");
-        gpiod_chip_close(chip);
+    struct gpiod_request_config *request_config = gpiod_request_config_new();
+    struct gpiod_line_config *line_config = gpiod_line_config_new();
+    struct gpiod_line_settings *line_settings = gpiod_line_settings_new();
+    if (!request_config || !line_config || !line_settings) {
+        perror("Unable to create libgpiod config objects");
+        goto cleanup;
     }
 
-    if (!TCKline) {
-        perror("TCKline line config failed");
-        gpiod_chip_close(chip);
+    gpiod_request_config_set_consumer(request_config, "Consumer");
+
+    unsigned int offset;
+
+    gpiod_line_settings_set_direction(line_settings, GPIOD_LINE_DIRECTION_OUTPUT);
+    gpiod_line_settings_set_output_value(line_settings, GPIOD_LINE_VALUE_INACTIVE);
+
+    offset = TMSPin;
+    if (gpiod_line_config_add_line_settings(line_config, &offset, 1, line_settings) < 0) {
+        perror("TMS line config failed");
+        goto cleanup;
+    }
+    TMSreq = gpiod_chip_request_lines(chip, request_config, line_config);
+    if (!TMSreq) {
+        perror("Request TMS as output failed");
+        goto cleanup;
+    }
+    gpiod_line_config_reset(line_config);
+
+    offset = TCKPin;
+    if (gpiod_line_config_add_line_settings(line_config, &offset, 1, line_settings) < 0) {
+        perror("TCK line config failed");
+        goto cleanup;
+    }
+    TCKreq = gpiod_chip_request_lines(chip, request_config, line_config);
+    if (!TCKreq) {
+        perror("Request TCK as output failed");
+        goto cleanup;
+    }
+    gpiod_line_config_reset(line_config);
+
+    offset = TDIPin;
+    if (gpiod_line_config_add_line_settings(line_config, &offset, 1, line_settings) < 0) {
+        perror("TDI line config failed");
+        goto cleanup;
+    }
+    TDIreq = gpiod_chip_request_lines(chip, request_config, line_config);
+    if (!TDIreq) {
+        perror("Request TDI as output failed");
+        goto cleanup;
+    }
+    gpiod_line_config_reset(line_config);
+
+    gpiod_line_settings_set_direction(line_settings, GPIOD_LINE_DIRECTION_INPUT);
+    offset = TDOPin;
+    if (gpiod_line_config_add_line_settings(line_config, &offset, 1, line_settings) < 0) {
+        perror("TDO line config failed");
+        goto cleanup;
+    }
+    TDOreq = gpiod_chip_request_lines(chip, request_config, line_config);
+    if (!TDOreq) {
+        perror("Request TDO as input failed");
+        goto cleanup;
     }
 
-    if (!TDIline) {
-        perror("TDIline line config failed");
-        gpiod_chip_close(chip);
+cleanup:
+    gpiod_line_settings_free(line_settings);
+    gpiod_line_config_free(line_config);
+    gpiod_request_config_free(request_config);
+
+    if (!TMSreq || !TCKreq || !TDIreq || !TDOreq) {
+        if (TMSreq) gpiod_line_request_release(TMSreq);
+        if (TCKreq) gpiod_line_request_release(TCKreq);
+        if (TDIreq) gpiod_line_request_release(TDIreq);
+        if (TDOreq) gpiod_line_request_release(TDOreq);
+        TMSreq = NULL;
+        TCKreq = NULL;
+        TDIreq = NULL;
+        TDOreq = NULL;
+        if (chip) {
+            gpiod_chip_close(chip);
+            chip = NULL;
+        }
     }
-
-    if (!TDOline) {
-        perror("TDOline line config failed");
-        gpiod_chip_close(chip);
-    }
-
-    int ret;
-
-    ret = gpiod_line_request_output(TMSline, "Consumer", 0);
-    if (ret < 0) {
-        perror("Request TMSline as output failed");
-        gpiod_line_release(TMSline);
-        gpiod_chip_close(chip);
-    }
-
-    ret = gpiod_line_request_output(TCKline, "Consumer", 0);
-    if (ret < 0) {
-        perror("Request TCKline as output failed");
-        gpiod_line_release(TCKline);
-        gpiod_chip_close(chip);
-    }
-
-    ret = gpiod_line_request_output(TDIline, "Consumer", 0);
-    if (ret < 0) {
-        perror("Request TDIline as output failed");
-        gpiod_line_release(TDIline);
-        gpiod_chip_close(chip);
-    }
-
-    ret = gpiod_line_request_input(TDOline, "Consumer");
-    if (ret < 0) {
-        perror("Request TDOline as input failed");
-        gpiod_line_release(TDOline);
-        gpiod_chip_close(chip);
-    }
-
 }
 
 IOGPIODPi::~IOGPIODPi()
 {
-        gpiod_line_release(TMSline);
-        gpiod_line_release(TCKline);
-        gpiod_line_release(TDIline);
-        gpiod_line_release(TDOline);
-        gpiod_chip_close(chip);
+        if (TMSreq) gpiod_line_request_release(TMSreq);
+        if (TCKreq) gpiod_line_request_release(TCKreq);
+        if (TDIreq) gpiod_line_request_release(TDIreq);
+        if (TDOreq) gpiod_line_request_release(TDOreq);
+        if (chip) gpiod_chip_close(chip);
 }
 
 void IOGPIODPi::txrx_block(const unsigned char *tdi, unsigned char *tdo, int length, bool last)
@@ -106,7 +138,7 @@ void IOGPIODPi::txrx_block(const unsigned char *tdi, unsigned char *tdo, int len
   if(tdo)
       tdo[j]=tdo_byte;
 
- gpiod_line_set_value(TCKline, 0);
+ gpiod_line_request_set_value(TCKreq, TCKPin, GPIOD_LINE_VALUE_INACTIVE);
   return;
 }
 
@@ -122,32 +154,32 @@ void IOGPIODPi::tx_tms(unsigned char *pat, int length, int force)
       tms = tms >> 1;
     }
     
-  gpiod_line_set_value(TCKline, 0);
+  gpiod_line_request_set_value(TCKreq, TCKPin, GPIOD_LINE_VALUE_INACTIVE);
 }
 
 void IOGPIODPi::tx(bool tms, bool tdi)
 {
-    gpiod_line_set_value(TCKline, 0);
+    gpiod_line_request_set_value(TCKreq, TCKPin, GPIOD_LINE_VALUE_INACTIVE);
 
     if(tdi)
-        gpiod_line_set_value(TDIline, 1);
+        gpiod_line_request_set_value(TDIreq, TDIPin, GPIOD_LINE_VALUE_ACTIVE);
     else
-        gpiod_line_set_value(TDIline, 0);
+        gpiod_line_request_set_value(TDIreq, TDIPin, GPIOD_LINE_VALUE_INACTIVE);
 
     if(tms)
-        gpiod_line_set_value(TMSline, 1);
+        gpiod_line_request_set_value(TMSreq, TMSPin, GPIOD_LINE_VALUE_ACTIVE);
    else
-        gpiod_line_set_value(TMSline, 0);
+        gpiod_line_request_set_value(TMSreq, TMSPin, GPIOD_LINE_VALUE_INACTIVE);
 
-    gpiod_line_set_value(TCKline, 1);
+    gpiod_line_request_set_value(TCKreq, TCKPin, GPIOD_LINE_VALUE_ACTIVE);
 }
 
 
 bool IOGPIODPi::txrx(bool tms, bool tdi)
 {
 
-  // std::cerr << "txrx" << gpiod_line_get_value(TDOline) << std::endl;
+  // std::cerr << "txrx" << gpiod_line_request_get_value(TDOreq, TDOPin) << std::endl;
     tx(tms, tdi);
-    return gpiod_line_get_value(TDOline);
+    return gpiod_line_request_get_value(TDOreq, TDOPin) == GPIOD_LINE_VALUE_ACTIVE;
  // return digitalRead(TDOPin);  
 }

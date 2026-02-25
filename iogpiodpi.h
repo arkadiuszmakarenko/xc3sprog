@@ -24,10 +24,10 @@ class IOGPIODPi : public IOBase
   
   private:
     struct gpiod_chip *chip;
-    struct gpiod_line *TMSline;
-    struct gpiod_line *TCKline;
-    struct gpiod_line *TDIline;
-    struct gpiod_line *TDOline;
+    struct gpiod_line_request *TMSreq;
+    struct gpiod_line_request *TCKreq;
+    struct gpiod_line_request *TDIreq;
+    struct gpiod_line_request *TDOreq;
 };
 
 #endif
