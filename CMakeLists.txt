@@ -1,20 +1,20 @@
 # Project
+cmake_minimum_required(VERSION 3.10)
 project(xc3sprog)
 set(xc3sprog_VERSION_MAJOR 0)
 set(xc3sprog_VERSION_MINOR 0)
 
-SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
 set(CMAKE_CXX_FLAGS "-g -Wall")
-cmake_minimum_required(VERSION 2.6)
 
-if(${WIN32})
+if(WIN32)
 set(USE_STATIC_FTDI ON)
-IF( ${CMAKE_COMPILER_IS_GNUCXX} )
+IF(CMAKE_COMPILER_IS_GNUCXX)
  # link libstdc++ and others statically
  add_definitions( -D__USE_MINGW_ANSI_STDIO )
  SET (CMAKE_EXE_LINKER_FLAGS    "-static-libstdc++ -static-libgcc")
-ENDIF( ${CMAKE_COMPILER_IS_GNUCXX} )
-endif(${WIN32})
+ENDIF()
+endif()
 
 option(USE_FTD2XX "Use FTDI libFTD2XX instead of free libftdi" ON)
 
@@ -60,14 +60,14 @@ set(CPACK_PACKAGE_DESCRIPTION          "JTAG Progarmming tools")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY  ${CPACK_PACKAGE_DESCRIPTION}
                                        )
 # Package settings
-if(${UNIX})
+if(UNIX)
   set(CPACK_GENERATOR                    "DEB;RPM")
   set(CPACK_CMAKE_GENERATOR              "Unix Makefiles")
   set(CPACK_PACKAGE_NAME                 ${PROJECT_NAME})
   set(CPACK_PACKAGE_FILE_NAME            ${PROJECT_NAME}-${VERSION_STRING}${PACK_ARCH})
-endif(${UNIX})
+endif()
 
-if(${WIN32})
+if(WIN32)
   set(CPACK_GENERATOR                    "NSIS")
   set(CPACK_CMAKE_GENERATOR              "MinGW Makefiles")
   set(CPACK_PACKAGE_NAME                 "${PROJECT_NAME}")
@@ -76,7 +76,7 @@ if(${WIN32})
   set(CPACK_PACKAGE_FILE_NAME            "${PROJECT_NAME}-${VERSION_STRING}-win32")
   set(CPACK_NSIS_DISPLAY_NAME            "libftdi")
   set(CPACK_NSIS_MODIFY_PATH             "ON")
-endif(${WIN32})
+endif()
 
 set(CPACK_RESOURCE_FILE_LICENSE        ${CMAKE_SOURCE_DIR}/LICENSE)
 
@@ -85,9 +85,9 @@ set(CPACK_SOURCE_IGNORE_FILES          "\\\\.svn" "build*")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME     ${CPACK_PACKAGE_FILE_NAME})
 
 # Subdirectories
-if(${UNIX})
+if(UNIX)
   set(CPACK_SET_DESTDIR "ON")
-endif(${UNIX})
+endif()
 
 #link libusb dynamic at runtime on windows at at compile time else
 #this circumvents a problem with Debian
