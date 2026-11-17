@@ -45,6 +45,7 @@ class ProgAlgXC95X
   Jtag *jtag;
   int DRegLength;
   void wait_idle(int tck, unsigned int usec);
+  int check_ir_capture();
   void flow_enable();
   void flow_disable();
   void flow_error_exit();

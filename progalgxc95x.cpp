@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
 #include <stdio.h>
+#include <time.h>
 #include <sys/time.h>
 #include <string.h>
 #include <unistd.h>
@@ -63,15 +64,31 @@ ProgAlgXC95X::ProgAlgXC95X(Jtag &j, int s)
    cable runs at an unknown rate, so meet both the count and the time. */
 void ProgAlgXC95X::wait_idle(int tck, unsigned int usec)
 {
-  struct timeval tv[2];
+  struct timespec t0, t1;
   long done;
 
-  gettimeofday(tv, NULL);
+  clock_gettime(CLOCK_MONOTONIC, &t0);
   jtag->cycleTCK(tck);
-  gettimeofday(tv+1, NULL);
-  done = deltaT(tv, tv + 1);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  done = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
   if (done < (long)usec)
     jtag->Usleep(usec - done);
+}
+
+/* iMPACT's check before erasing or programming: the instruction register
+   captures 000xxx01 (bits 4:2 are status and not checked). Anything else
+   means the chain is not what we expect. Returns 0 when it is. */
+int ProgAlgXC95X::check_ir_capture()
+{
+  byte capture;
+  jtag->shiftIR(&BYPASS, &capture);
+  if ((capture & 0xe3) != 0x01)
+    {
+      fprintf(stderr, "JTAG instruction capture %02x, expected 01 in bits 7:5 "
+              "and 1:0\n", capture);
+      return 1;
+    }
+  return 0;
 }
 
 void ProgAlgXC95X::flow_enable()
@@ -397,6 +414,8 @@ void ProgAlgXC95X::array_read(JedecFile &file)
 int ProgAlgXC95X::erase()
 {
   int ret;
+  if (check_ir_capture())
+    return 1;
   flow_enable();
   ret = flow_erase();
   if (ret == 0)
@@ -421,6 +440,8 @@ int ProgAlgXC95X::blank_check()
 int ProgAlgXC95X::array_program(JedecFile &file)
 {
   int ret;
+  if (check_ir_capture())
+    return 1;
   flow_enable();
   ret = flow_array_program(file);
   if (ret)

@@ -39,6 +39,8 @@ struct jedec_data {
       unsigned pin_count;
       unsigned vector_count;
       unsigned checksum;
+      int has_checksum;   /* a C field was read */
+      int complete;       /* ETX was read */
       unsigned char fuse_default;
 
       unsigned char*fuse_list;
@@ -65,6 +67,8 @@ class JedecFile
   int readFile(FILE *fp);
   inline unsigned int getLength(){return jed.fuse_count;}
   inline unsigned short getChecksum(){return jed.checksum;}
+  inline bool hasChecksum(){return jed.has_checksum;}
+  inline bool isComplete(){return jed.complete;}
   char *getDevice(){return jed.device;}
   char *getVersion(){return jed.version;}
   char *getDate(){return jed.date;}

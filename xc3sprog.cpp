@@ -1342,113 +1342,118 @@ test_reconf:
 int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args, 
                  bool verbose, bool erase, const char *device)
 {
-    int i, size = (id & 0x000ff000)>>13;
+    int size = (id & 0x000ff000)>>13;
     ProgAlgXC95X alg(jtag, size);
-    
-    if (erase)
-    {
-        if (alg.erase())
-        {
-            fprintf(stderr, "Erase failed\n");
-            return 1;
-        }
-    }
+    JedecFile  jedecfile;
+    char action = 'w';
+    FILE *jedecfile_fp = NULL;
 
-    for (i = 0; i< argc; i++)
+    /* Check the arguments and the file before anything touches the device */
+    if (argc > 1)
     {
-        int ret = 0;
+        fprintf(stderr, "Only one file is supported: %s\n", args[1]);
+        return 1;
+    }
+    if (argc == 1)
+    {
         unsigned int jedecfile_offset = 0;
         unsigned int jedecfile_rlength = 0;
-        char action = 'w';
-        JedecFile  jedecfile;
         FILE_STYLE  jedecfile_style= STYLE_JEDEC;
-             
-        if (i>1)
-        {
-            fprintf(stderr, "Multiple arguments not supported: %s\n", args[i]);
-            continue;
-        }
-        
-        FILE *jedecfile_fp = 
-            getFile_and_Attribute_from_name
-            (args[i], &action, NULL, &jedecfile_offset,
+
+        jedecfile_fp = getFile_and_Attribute_from_name
+            (args[0], &action, NULL, &jedecfile_offset,
              &jedecfile_style, &jedecfile_rlength);
-        
-        if (jedecfile_offset != 0)
+        if (jedecfile_offset != 0 || jedecfile_rlength != 0 ||
+            jedecfile_style != STYLE_JEDEC)
         {
-            fprintf(stderr, "Offset %d not supported, Using 0\n", 
-                    jedecfile_offset);
-            jedecfile_offset = 0;
+            fprintf(stderr, "%s: offsets, lengths and styles other than "
+                    "JEDEC are not supported\n", args[0]);
+            return 1;
         }
-        if (jedecfile_rlength != 0)
+        if (action == 'W')
         {
-            fprintf(stderr, "Readlength %d not supported, Using 0\n", 
-                    jedecfile_rlength);
-            jedecfile_rlength = 0;
+            fprintf(stderr, "%s: W (no erase) is not supported, use w\n",
+                    args[0]);
+            return 1;
         }
-        if(jedecfile_style != STYLE_JEDEC)
+        if (action != 'r' && action != 'v' && action != 'w')
         {
-            fprintf(stderr, "Style %s not supported, skipping\n",
-                    BitFile::styleToString(jedecfile_style));
+            fprintf(stderr, "%s: unknown action '%c'\n", args[0], action);
+            return 1;
         }
-        if (action == 'r')
+        if (!jedecfile_fp)
         {
-            alg.array_read(jedecfile);
-            jedecfile.saveAsJed(device, jedecfile_fp);
+            fprintf(stderr, "%s: cannot open the file\n", args[0]);
+            return 1;
         }
-        else if (action == 'v' || tolower(action) == 'w') 
+        if (erase && action != 'w')
         {
-            /* Check the file before anything touches the device */
-            if (jedecfile.readFile(jedecfile_fp))
+            fprintf(stderr, "-e would erase the device before the %s\n",
+                    action == 'r' ? "read" : "verify");
+            return 1;
+        }
+        if (action != 'r')
+        {
+            if (jedecfile.readFile(jedecfile_fp) || !jedecfile.isComplete())
             {
-                fprintf(stderr, "%s: not a valid JEDEC file\n", args[i]);
+                fprintf(stderr, "%s: not a complete JEDEC file\n", args[0]);
                 return 1;
             }
             if (jedecfile.getLength() != alg.fuseCount())
             {
-                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[i],
+                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[0],
                         jedecfile.getLength(), device, alg.fuseCount());
                 return 1;
             }
-            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
+            if (!jedecfile.hasChecksum() ||
+                jedecfile.getChecksum() != jedecfile.calcChecksum())
             {
-                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
-                        args[i], jedecfile.getChecksum(),
-                        jedecfile.calcChecksum());
+                fprintf(stderr, "%s: checksum %s%04x, the fuses sum to %04x\n",
+                        args[0], jedecfile.hasChecksum() ? "" : "missing, ",
+                        jedecfile.getChecksum(), jedecfile.calcChecksum());
                 return 1;
             }
-            if (jedecfile.getDevice()[0] &&
-                strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
+            if (strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
             {
                 fprintf(stderr, "%s is for a %s, the device is a %s\n",
-                        args[i], jedecfile.getDevice(), device);
+                        args[0], jedecfile.getDevice()[0] ?
+                        jedecfile.getDevice() : "(no device named)", device);
                 return 1;
             }
-            if (action == 'w')
-            {
-                if (!erase)
-                {
-                    if (alg.erase())
-                    {
-                        fprintf(stderr, "Erase failed: not programming\n");
-                        return 1;
-                    }
-                }
-	    }
-	    if(tolower(action) == 'w')
-            {
-                if (alg.array_program(jedecfile))
-                {
-                    fprintf(stderr, "Programming failed\n");
-                    return 1;
-                }
-            }
-            ret = alg.array_verify(jedecfile);
         }
-        if(ret)
-            return ret;
     }
-    return 0;
+
+    if (erase || (argc == 1 && action == 'w'))
+    {
+        if (alg.erase())
+        {
+            fprintf(stderr, "Erase failed%s\n", argc ? ": not programming" : "");
+            return 1;
+        }
+    }
+    if (argc == 0)
+        return 0;
+
+    if (action == 'r')
+    {
+        alg.array_read(jedecfile);
+        jedecfile.saveAsJed(device, jedecfile_fp);
+        if (fflush(jedecfile_fp) || ferror(jedecfile_fp))
+        {
+            fprintf(stderr, "%s: write failed\n", args[0]);
+            return 1;
+        }
+        return 0;
+    }
+    if (action == 'w')
+    {
+        if (alg.array_program(jedecfile))
+        {
+            fprintf(stderr, "Programming failed\n");
+            return 1;
+        }
+    }
+    return alg.array_verify(jedecfile);
 }
 
 int programXC2C( Jtag &jtag, unsigned int id, int argc, char ** args, 

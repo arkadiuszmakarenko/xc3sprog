@@ -1,4 +1,5 @@
 #include "iogpiodpi.h"
+#include <stdio.h>
 #include <iostream>
 
 IOGPIODPi::IOGPIODPi(int tms, int tck, int tdi, int tdo)
@@ -98,6 +99,18 @@ cleanup:
             chip = NULL;
         }
     }
+}
+
+/* The constructor cannot fail: report lines it could not get here, so
+   xc3sprog stops instead of clocking JTAG through missing lines. */
+int IOGPIODPi::Init(struct cable_t *cable, const char *devopt, unsigned int freq)
+{
+    if (!TMSreq || !TCKreq || !TDIreq || !TDOreq)
+    {
+        fprintf(stderr, "Could not get the JTAG GPIO lines\n");
+        return 1;
+    }
+    return 0;
 }
 
 IOGPIODPi::~IOGPIODPi()
