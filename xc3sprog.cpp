@@ -1360,6 +1360,10 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
            getFile_and_Attribute_from_name turns any longer action into w,
            and opens (for a read, creates) the file. */
         const char *colon = strchr(args[0], ':');
+#if defined(__WIN32__)
+        if (args[0][0] && args[0][1] == ':')   /* a DOS drive letter */
+            colon = strchr(args[0] + 2, ':');
+#endif
         char given = colon ? colon[1] : 'w';
         if (colon && (strlen(colon + 1) != 1 || strchr(colon + 1, ':')))
         {
