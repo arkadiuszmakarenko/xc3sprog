@@ -83,7 +83,8 @@ int programXCF(Jtag &jtag, DeviceDB &db, int argc, char **args,
                const char *device, int *chainpositions, int nchainpos,
                const vector<string>& xcfopts);
 int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args, 
-                 bool verbose, bool erase, const char *device);
+                 bool verbose, bool erase, const char *device,
+                 bool override_protect = false);
 int programXC2C(Jtag &jtag, unsigned int id, int argc, char ** args, 
                 bool verbose, bool erase, const char *mapdir,
                 const char *device);
@@ -367,6 +368,7 @@ void usage(bool all_options)
   OPT("-p val[,val...]", "Use device at JTAG Chain position <val>.");
   OPT("",   "Default (0) is device connected to JTAG Adapter TDO.");
   OPT("-e", "Erase whole device.");
+  OPT("-O", "XC95XL/XV: override write protection in the erase, as iMPACT erase -o.");
   OPT("-h", "Print this help.");
   OPT("-I[file]", "Work on connected SPI Flash (ISF Mode),");
   OPT(""  , "after loading 'bscan_spi' bitfile if given.");
@@ -640,6 +642,7 @@ int main(int argc, char **args)
   bool     spiflash     = false;
   bool     reconfigure  = false;
   bool     erase        = false;
+  bool     override_protect = false;
   bool     use_ftd2xx   = false;
   unsigned int jtag_freq= 0;
   unsigned long id;
@@ -676,7 +679,7 @@ int main(int argc, char **args)
 
   // Start from parsing command line arguments
   while(true) {
-      int c = getopt(argc, args, "?hCLc:d:DeE:F:i:I::jJ:Lm:o:p:Rs:S:T::vX:");
+      int c = getopt(argc, args, "?hCLc:d:DeE:F:i:I::jJ:Lm:o:Op:Rs:S:T::vX:");
     switch(c) 
     {
     case -1:
@@ -735,6 +738,10 @@ int main(int argc, char **args)
 
     case 'e':
       erase = true;
+      break;
+
+    case 'O':
+      override_protect = true;
       break;
 
     case 'D':
@@ -915,7 +922,7 @@ int main(int argc, char **args)
       else if( family == 0x4b) /* XC95XL XC95XV*/
 	{
 	  return programXC95X(jtag, id, argc,args, verbose, erase,
-			      db.idToDescription(id));
+			      db.idToDescription(id), override_protect);
 	}
       else if ((family & 0x7e) == 0x36) /* XC2C */
 	{
@@ -1340,7 +1347,8 @@ test_reconf:
 }
 
 int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args, 
-                 bool verbose, bool erase, const char *device)
+                 bool verbose, bool erase, const char *device,
+                 bool override_protect)
 {
     int size = (id & 0x000ff000)>>13;
     ProgAlgXC95X alg(jtag, size);
@@ -1380,6 +1388,11 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
         if (tolower(given) != 'r' && tolower(given) != 'v' && tolower(given) != 'w')
         {
             fprintf(stderr, "%s: unknown action '%c'\n", args[0], given);
+            return 1;
+        }
+        if (override_protect && !erase && tolower(given) != 'w')
+        {
+            fprintf(stderr, "-O only goes with an erase (-e or a write)\n");
             return 1;
         }
         if (erase && tolower(given) != 'w')
@@ -1432,9 +1445,14 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
         }
     }
 
+    if (override_protect && !erase && argc == 0)
+    {
+        fprintf(stderr, "-O only goes with an erase (-e or a write)\n");
+        return 1;
+    }
     if (erase || (argc == 1 && action == 'w'))
     {
-        if (alg.erase())
+        if (alg.erase(override_protect))
         {
             fprintf(stderr, "Erase failed%s\n", argc ? ": not programming" : "");
             return 1;

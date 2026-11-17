@@ -29,6 +29,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 const byte ProgAlgXC95X::ISC_NOOP=0xff;
 const byte ProgAlgXC95X::ISC_DISABLE=0xf0;
 const byte ProgAlgXC95X::ISC_ERASE=0xed;
+/* FERASE: iMPACT sends it with the key 0xAA55 for "erase -o" */
+const byte ProgAlgXC95X::XSC_SPECIAL_ERASE=0xec;
 const byte ProgAlgXC95X::ISC_PROGRAM=0xea;
 const byte ProgAlgXC95X::ISC_READ=0xee;
 /* ISPEN, as Xilinx iMPACT uses. 0xe9 is ISPENC. */
@@ -88,6 +90,9 @@ int ProgAlgXC95X::check_ir_capture()
               "and 1:0\n", capture);
       return 1;
     }
+  if (capture & 0x1c)
+    fprintf(stderr, "JTAG instruction capture %02x: status bits 4:2 are set "
+            "(a write-protected part showed bit 2; -O overrides)\n", capture);
   return 0;
 }
 
@@ -137,6 +142,29 @@ int ProgAlgXC95X::flow_blank_check()
     }
   if(jtag->getVerbose())
     fprintf(stderr, "Device is blank\n");
+  return 0;
+}
+
+/* iMPACT "erase -o": before the bulk erase, FERASE with the key 0xAA55 in
+   the address field clears write protection. Returns 0 when the status
+   says it finished. */
+int ProgAlgXC95X::flow_erase_override()
+{
+  byte i_data[3] = {0x57, 0xa9, 0x02};  /* 0x2a957: 0xaa55 << 2 | 11 */
+  byte s_data[3] = {0x55, 0xa9, 0x02};  /* 0x2a955 */
+  byte o_data[3];
+  jtag->shiftIR(&XSC_SPECIAL_ERASE);
+  jtag->shiftDR(i_data,0,18);
+  wait_idle(200000, 500000);
+  jtag->shiftDR(s_data,o_data,18);
+  if((o_data[0]& 0x03) != 0x01)
+    {
+      fprintf(stderr, "Protection override failed (status %02x)\n",
+              o_data[0] & 0x03);
+      return 1;
+    }
+  if(jtag->getVerbose())
+    fprintf(stderr, "Protection override done\n");
   return 0;
 }
 
@@ -410,14 +438,18 @@ void ProgAlgXC95X::array_read(JedecFile &file)
   flow_disable();
 }
 
-/* Returns 0 when the device erased and is blank. */
-int ProgAlgXC95X::erase()
+/* Returns 0 when the device erased and is blank. override_protect runs
+   iMPACT's protection override first (xc3sprog -O). */
+int ProgAlgXC95X::erase(bool override_protect)
 {
-  int ret;
+  int ret = 0;
   if (check_ir_capture())
     return 1;
   flow_enable();
-  ret = flow_erase();
+  if (override_protect)
+    ret = flow_erase_override();
+  if (ret == 0)
+    ret = flow_erase();
   if (ret == 0)
     ret = flow_blank_check();
   if (ret)
