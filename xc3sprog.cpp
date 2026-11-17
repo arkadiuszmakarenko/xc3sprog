@@ -1348,7 +1348,7 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
     char action = 'w';
     FILE *jedecfile_fp = NULL;
 
-    /* Check the arguments and the file before anything touches the device */
+    /* Check the arguments and the file before the device enters ISP mode */
     if (argc > 1)
     {
         fprintf(stderr, "Only one file is supported: %s\n", args[1]);
@@ -1356,40 +1356,40 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
     }
     if (argc == 1)
     {
-        unsigned int jedecfile_offset = 0;
-        unsigned int jedecfile_rlength = 0;
-        FILE_STYLE  jedecfile_style= STYLE_JEDEC;
-
-        jedecfile_fp = getFile_and_Attribute_from_name
-            (args[0], &action, NULL, &jedecfile_offset,
-             &jedecfile_style, &jedecfile_rlength);
-        if (jedecfile_offset != 0 || jedecfile_rlength != 0 ||
-            jedecfile_style != STYLE_JEDEC)
+        /* Only FILE or FILE:ACTION with a one-letter action. Check it here:
+           getFile_and_Attribute_from_name turns any longer action into w,
+           and opens (for a read, creates) the file. */
+        const char *colon = strchr(args[0], ':');
+        char given = colon ? colon[1] : 'w';
+        if (colon && (strlen(colon + 1) != 1 || strchr(colon + 1, ':')))
         {
-            fprintf(stderr, "%s: offsets, lengths and styles other than "
-                    "JEDEC are not supported\n", args[0]);
+            fprintf(stderr, "%s: use FILE or FILE:ACTION, ACTION one of "
+                    "w, v, r, R\n", args[0]);
             return 1;
         }
-        if (action == 'W')
+        if (given == 'W')
         {
             fprintf(stderr, "%s: W (no erase) is not supported, use w\n",
                     args[0]);
             return 1;
         }
-        if (action != 'r' && action != 'v' && action != 'w')
+        if (tolower(given) != 'r' && tolower(given) != 'v' && tolower(given) != 'w')
         {
-            fprintf(stderr, "%s: unknown action '%c'\n", args[0], action);
+            fprintf(stderr, "%s: unknown action '%c'\n", args[0], given);
             return 1;
         }
+        if (erase && tolower(given) != 'w')
+        {
+            fprintf(stderr, "-e would erase the device before the %s\n",
+                    tolower(given) == 'r' ? "read" : "verify");
+            return 1;
+        }
+
+        jedecfile_fp = getFile_and_Attribute_from_name
+            (args[0], &action, NULL, NULL, NULL, NULL);
         if (!jedecfile_fp)
         {
             fprintf(stderr, "%s: cannot open the file\n", args[0]);
-            return 1;
-        }
-        if (erase && action != 'w')
-        {
-            fprintf(stderr, "-e would erase the device before the %s\n",
-                    action == 'r' ? "read" : "verify");
             return 1;
         }
         if (action != 'r')
@@ -1405,12 +1405,17 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
                         jedecfile.getLength(), device, alg.fuseCount());
                 return 1;
             }
-            if (!jedecfile.hasChecksum() ||
-                jedecfile.getChecksum() != jedecfile.calcChecksum())
+            if (!jedecfile.hasChecksum())
             {
-                fprintf(stderr, "%s: checksum %s%04x, the fuses sum to %04x\n",
-                        args[0], jedecfile.hasChecksum() ? "" : "missing, ",
-                        jedecfile.getChecksum(), jedecfile.calcChecksum());
+                fprintf(stderr, "%s: no four-digit C (fuse checksum) field\n",
+                        args[0]);
+                return 1;
+            }
+            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
+            {
+                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
+                        args[0], jedecfile.getChecksum(),
+                        jedecfile.calcChecksum());
                 return 1;
             }
             if (strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)

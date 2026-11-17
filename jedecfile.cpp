@@ -90,6 +90,7 @@ static void m_end(int ch, struct state_mach*m);
 
 int m_N_item;
 int m_N_pos;
+int m_C_digits;
 int m_H_pos = 0;
 char m_H_string[MAX_SIZE];
 char m_N_strings[MAX_ITEM][MAX_SIZE];
@@ -152,6 +153,8 @@ static void m_base(int ch, struct state_mach*m)
           case 'C':
             m->state = m_C;
             m->jed->checksum = 0;
+            m->jed->has_checksum = 0;
+            m_C_digits = 0;
             break;
           case 'N':
             m->state = m_N;
@@ -177,7 +180,8 @@ static void m_C(int ch, struct state_mach*m)
             return;
 
       if (ch == '*') {
-            m->jed->has_checksum = 1;
+            /* a fuse checksum is exactly four hex digits */
+            m->jed->has_checksum = (m_C_digits == 4);
             m->state = m_base;
             return;
       }
@@ -186,6 +190,7 @@ static void m_C(int ch, struct state_mach*m)
         {
           m->jed->checksum <<=4;
           m->jed->checksum += ch - '0';
+          m_C_digits++;
           return;
         }
       ch &= 0x5f;
@@ -193,6 +198,7 @@ static void m_C(int ch, struct state_mach*m)
         {
           m->jed->checksum <<=4;
           m->jed->checksum += ch - '7';
+          m_C_digits++;
           return;
         }
 
