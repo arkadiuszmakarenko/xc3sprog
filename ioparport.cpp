@@ -412,7 +412,7 @@ void IOParport::txrx_block(const unsigned char *tdi, unsigned char *tdo,
   int i=0;
   int j=0;
   unsigned char tdo_byte=0;
-  unsigned char tdi_byte;
+  unsigned char tdi_byte=0; /* no tdi: shift zeros (IOBase::shiftTDO) */
   unsigned char data=def_byte;
   if (tdi)
       tdi_byte = tdi[j];

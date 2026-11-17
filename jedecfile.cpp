@@ -86,9 +86,11 @@ static void m_QF(int ch, struct state_mach*m);
 static void m_QP(int ch, struct state_mach*m);
 static void m_skip(int ch, struct state_mach*m);
 static void m_N(int ch, struct state_mach*m);
+static void m_end(int ch, struct state_mach*m);
 
 int m_N_item;
 int m_N_pos;
+int m_C_digits;
 int m_H_pos = 0;
 char m_H_string[MAX_SIZE];
 char m_N_strings[MAX_ITEM][MAX_SIZE];
@@ -118,15 +120,20 @@ static void m_header(int ch, struct state_mach*m)
        case '\r':
 	 if (m_H_pos)
 	   {
+	     m_H_string[m_H_pos] = 0;
 	     char * ptr = strchr( m_H_string, ':');
 	     if (ptr)
-	       strncpy(m->jed->date, ptr, MAX_SIZE);
+	       {
+		 strncpy(m->jed->date, ptr, MAX_SIZE-1);
+		 m->jed->date[MAX_SIZE-1] = 0;
+	       }
 	   }
+	 m_H_pos = 0;
 	 m->state = m_startup;
 	 break;
        default:
-	 m_H_string[m_H_pos] = ch;
-	 m_H_pos++;
+	 if (m_H_pos < MAX_SIZE-1)
+	   m_H_string[m_H_pos++] = ch;
        }
 }
 
@@ -146,10 +153,20 @@ static void m_base(int ch, struct state_mach*m)
           case 'C':
             m->state = m_C;
             m->jed->checksum = 0;
+            m->jed->has_checksum = 0;
+            m_C_digits = 0;
             break;
           case 'N':
             m->state = m_N;
 	    m_N_item = -1;
+	    m_N_pos = 0;
+	    for (int i = 0; i < MAX_ITEM; i++)
+	      m_N_strings[i][0] = 0;
+            break;
+          case '\003':
+            /* ETX: the transmission checksum after it is not read */
+            m->jed->complete = 1;
+            m->state = m_end;
             break;
           default:
             m->state = m_skip;
@@ -163,6 +180,8 @@ static void m_C(int ch, struct state_mach*m)
             return;
 
       if (ch == '*') {
+            /* a fuse checksum is exactly four hex digits */
+            m->jed->has_checksum = (m_C_digits == 4);
             m->state = m_base;
             return;
       }
@@ -171,6 +190,7 @@ static void m_C(int ch, struct state_mach*m)
         {
           m->jed->checksum <<=4;
           m->jed->checksum += ch - '0';
+          m_C_digits++;
           return;
         }
       ch &= 0x5f;
@@ -178,6 +198,7 @@ static void m_C(int ch, struct state_mach*m)
         {
           m->jed->checksum <<=4;
           m->jed->checksum += ch - '7';
+          m_C_digits++;
           return;
         }
 
@@ -244,27 +265,34 @@ static void m_Lfuse(int ch, struct state_mach*m)
 #define strnicmp strncasecmp
 #endif
 
+/* Terminate the N item being read, if it is one we keep */
+static void m_N_end_item(void)
+{
+  if (m_N_item >= 0 && m_N_item < MAX_ITEM)
+    m_N_strings[m_N_item][m_N_pos] = 0;
+}
+
 static void m_N(int ch, struct state_mach*m)
 {
       switch (ch) {
 
       case '*':
+	m_N_end_item();
 	if ((stricmp(m_N_strings[0], "DEVICE")) == 0)
 	  {
-	    m_N_strings[m_N_item][m_N_pos] = 0;
-	    strncpy(m->jed->device, m_N_strings[1], MAX_SIZE);
+	    strncpy(m->jed->device, m_N_strings[1], MAX_SIZE-1);
+	    m->jed->device[MAX_SIZE-1] = 0;
 	  }
 	if ((stricmp(m_N_strings[0], "VERSION")) == 0)
 	  {
-	    m_N_strings[m_N_item][m_N_pos] = 0;
-	    strncpy(m->jed->version, m_N_strings[1], MAX_SIZE);
+	    strncpy(m->jed->version, m_N_strings[1], MAX_SIZE-1);
+	    m->jed->version[MAX_SIZE-1] = 0;
 	  }
 	m->state = m_base;
 	m_N_item= -1;
 	break;
       case ' ':
-	if(m_N_item >=0)
-	  m_N_strings[m_N_item][m_N_pos] = 0;
+	m_N_end_item();
 	if (m_N_item < MAX_ITEM)
 	  {
 	    /* Don't stumble on too many items like in ISE XC2C Jedecfiles */
@@ -277,8 +305,7 @@ static void m_N(int ch, struct state_mach*m)
 	  
       default:
 	if((m_N_item >=0) && (m_N_item <MAX_ITEM) && (m_N_pos < MAX_SIZE-1))
-	  m_N_strings[m_N_item][m_N_pos] = ch;
-	m_N_pos++;
+	  m_N_strings[m_N_item][m_N_pos++] = ch;
 	break;
       }
 }
@@ -347,6 +374,11 @@ static void m_QP(int ch, struct state_mach*m)
       throw  io_exception(std::string("m_QP"));
 }
 
+/* After ETX: nothing more is part of the fuse data */
+static void m_end(int ch, struct state_mach*m)
+{
+}
+
 static void m_skip(int ch, struct state_mach*m)
 {
       switch (ch) {
@@ -362,6 +394,8 @@ JedecFile::JedecFile(void)
   : Error(false), logfile(stderr) 
 {
   jed.checksum = 0;
+  jed.has_checksum = 0;
+  jed.complete = 0;
   jed.fuse_count = 0;
   jed.pin_count = 0;
   jed.fuse_list = 0;
@@ -387,6 +421,9 @@ int JedecFile::readFile(FILE *fp)
   //jed = (jedec_data_t)calloc(1, sizeof(struct jedec_data));
   m.jed = &jed;
   m.state = m_startup;
+  m_H_pos = 0;
+  m_N_item = -1;
+  m_N_pos = 0;
   while ((ch = fgetc(fp)) != EOF) {
     m.state(ch, &m);
     if (m.state == 0) {

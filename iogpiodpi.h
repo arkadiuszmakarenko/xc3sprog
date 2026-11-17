@@ -9,6 +9,7 @@ class IOGPIODPi : public IOBase
  public:
   IOGPIODPi(int tms, int tck, int tdi, int tdo);
   virtual ~IOGPIODPi();
+  int Init(struct cable_t *cable, const char *devopt, unsigned int freq);
 
  protected:
   void tx(bool tms, bool tdi);

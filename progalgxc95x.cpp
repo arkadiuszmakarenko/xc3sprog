@@ -20,16 +20,21 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
 #include <stdio.h>
+#include <time.h>
 #include <sys/time.h>
+#include <string.h>
 #include <unistd.h>
 #include "progalgxc95x.h"
 
 const byte ProgAlgXC95X::ISC_NOOP=0xff;
 const byte ProgAlgXC95X::ISC_DISABLE=0xf0;
 const byte ProgAlgXC95X::ISC_ERASE=0xed;
+/* FERASE: iMPACT sends it with the key 0xAA55 for "erase -o" */
+const byte ProgAlgXC95X::XSC_SPECIAL_ERASE=0xec;
 const byte ProgAlgXC95X::ISC_PROGRAM=0xea;
 const byte ProgAlgXC95X::ISC_READ=0xee;
-const byte ProgAlgXC95X::ISC_ENABLE=0xe9;
+/* ISPEN, as Xilinx iMPACT uses. 0xe9 is ISPENC. */
+const byte ProgAlgXC95X::ISC_ENABLE=0xe8;
 
 const byte ProgAlgXC95X::XSC_BLANK_CHECK=0xe5;
 
@@ -56,12 +61,47 @@ ProgAlgXC95X::ProgAlgXC95X(Jtag &j, int s)
    }
 }
 
+/* Stay in Run-Test/Idle for at least tck clocks and at least usec
+   microseconds. iMPACT's SVF counts its waits in TCK at 1 MHz; a bit-banged
+   cable runs at an unknown rate, so meet both the count and the time. */
+void ProgAlgXC95X::wait_idle(int tck, unsigned int usec)
+{
+  struct timespec t0, t1;
+  long done;
+
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  jtag->cycleTCK(tck);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  done = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
+  if (done < (long)usec)
+    jtag->Usleep(usec - done);
+}
+
+/* iMPACT's check before erasing or programming: the instruction register
+   captures 000xxx01 (bits 4:2 are status and not checked). Anything else
+   means the chain is not what we expect. Returns 0 when it is. */
+int ProgAlgXC95X::check_ir_capture()
+{
+  byte capture;
+  jtag->shiftIR(&BYPASS, &capture);
+  if ((capture & 0xe3) != 0x01)
+    {
+      fprintf(stderr, "JTAG instruction capture %02x, expected 01 in bits 7:5 "
+              "and 1:0\n", capture);
+      return 1;
+    }
+  if (capture & 0x1c)
+    fprintf(stderr, "JTAG instruction capture %02x: status bits 4:2 are set "
+            "(a write-protected part showed bit 2; -O overrides)\n", capture);
+  return 0;
+}
+
 void ProgAlgXC95X::flow_enable()
 {
   byte data[1];
 
   jtag->shiftIR(&ISC_ENABLE);
-  data[0]=0x15;
+  data[0]=0x05;
   jtag->shiftDR(data,0,6);
   jtag->cycleTCK(1);
 }
@@ -69,7 +109,7 @@ void ProgAlgXC95X::flow_enable()
 void ProgAlgXC95X::flow_disable()
 {
   jtag->shiftIR(&ISC_DISABLE);
-  jtag->Usleep(100);
+  wait_idle(100, 100);
   jtag->shiftIR(&BYPASS);
   jtag->cycleTCK(1);
 }
@@ -81,34 +121,69 @@ void ProgAlgXC95X::flow_error_exit()
   jtag->cycleTCK(1);
 }
 
+/* The status shifts below send the operation's word again with control
+   bits 01, as iMPACT does, and the captured low two bits read 01 when the
+   operation finished. Words are 18 bits, least significant byte first. */
+
+/* Returns 0 when the device is blank. */
 int ProgAlgXC95X::flow_blank_check()
 {
-  byte i_data[3]={0x3,0,0};
+  byte i_data[3]={0x03,0,0};  /* 0x00003 */
+  byte s_data[3]={0x01,0,0};  /* 0x00001 */
   byte o_data[3];
   jtag->shiftIR(&XSC_BLANK_CHECK);
   jtag->shiftDR(i_data, 0,18);
-  jtag->cycleTCK(500);
-  jtag->shiftDR(0,o_data,18);
-  if(jtag->getVerbose())
+  wait_idle(500, 500);
+  jtag->shiftDR(s_data,o_data,18);
+  if ((o_data[0] & 0x03) != 0x01)
     {
-      if ((o_data[0] & 0x03) == 0x01)
-	fprintf(stderr, "Device is blank\n");
-      else
-	fprintf(stderr, "Device is not blank\n");
+      fprintf(stderr, "Device is not blank (status %02x)\n", o_data[0] & 0x03);
+      return 1;
     }
-  return ((o_data[0] & 0x03) == 0x01);
-  
+  if(jtag->getVerbose())
+    fprintf(stderr, "Device is blank\n");
+  return 0;
 }
 
-void ProgAlgXC95X::flow_erase()
+/* iMPACT "erase -o": before the bulk erase, FERASE with the key 0xAA55 in
+   the address field clears write protection. Returns 0 when the status
+   says it finished. */
+int ProgAlgXC95X::flow_erase_override()
 {
-  byte data[3] = {0x03, 0, 0};
+  byte i_data[3] = {0x57, 0xa9, 0x02};  /* 0x2a957: 0xaa55 << 2 | 11 */
+  byte s_data[3] = {0x55, 0xa9, 0x02};  /* 0x2a955 */
+  byte o_data[3];
+  jtag->shiftIR(&XSC_SPECIAL_ERASE);
+  jtag->shiftDR(i_data,0,18);
+  wait_idle(200000, 500000);
+  jtag->shiftDR(s_data,o_data,18);
+  if((o_data[0]& 0x03) != 0x01)
+    {
+      fprintf(stderr, "Protection override failed (status %02x)\n",
+              o_data[0] & 0x03);
+      return 1;
+    }
+  if(jtag->getVerbose())
+    fprintf(stderr, "Protection override done\n");
+  return 0;
+}
+
+/* Bulk erase. Returns 0 when the status says the erase finished. */
+int ProgAlgXC95X::flow_erase()
+{
+  byte i_data[3] = {0xff, 0xff, 0x03};  /* 0x3ffff: every address bit set */
+  byte s_data[3] = {0xfd, 0xff, 0x03};  /* 0x3fffd */
+  byte o_data[3];
   jtag->shiftIR(&ISC_ERASE);
-  jtag->shiftDR(data,0,18);
-  jtag->Usleep(500000);
-  jtag->shiftDR(0,data,18);
-  if((data[0]& 0x03) != 0x01)
-    fprintf(stderr, "Erase still running %02x\n", data[0]);
+  jtag->shiftDR(i_data,0,18);
+  wait_idle(200000, 500000);
+  jtag->shiftDR(s_data,o_data,18);
+  if((o_data[0]& 0x03) != 0x01)
+    {
+      fprintf(stderr, "Erase failed (status %02x)\n", o_data[0] & 0x03);
+      return 1;
+    }
+  return 0;
 }
   
 #define MaxSector 108
@@ -161,20 +236,17 @@ int ProgAlgXC95X::flow_array_program(JedecFile &file)
 	  jtag->shiftIR(&ISC_PROGRAM);
 	  jtag->shiftDR(preamble,0,2,0,false);
 	  jtag->shiftDR(i_data,0,(DRegLength+2)*8);
-	  if((l == 2) && (m == 4))
-	    jtag->Usleep(50000);
-	  else
-	    jtag->cycleTCK(1);
 	  if ((l == 2) && (m == 4))
 	    {
+	      /* Control bits 11 programmed the sector. Read its status as
+		 iMPACT does: shift the word again with control bits 00; the
+		 two bits captured first read 01 when programming finished. */
+	      wait_idle(20000, 50000);
 	      preamble[0]= 0x00;
 	      for(k=0; k< 32; k++)
 		{
-		  jtag->shiftIR(&ISC_PROGRAM);
-		  jtag->shiftDR(preamble, 0,2,0,false);
+		  jtag->shiftDR(preamble, o_data, 2, 0, false);
 		  jtag->shiftDR(i_data, 0,(DRegLength+2)*8);
-		  jtag->Usleep(50000);
-		  jtag->shiftDR(0,o_data, ((DRegLength+2)*8)+2);
 		  if(jtag->getVerbose())
 		    {
 		      fprintf(stderr, ".");
@@ -182,13 +254,17 @@ int ProgAlgXC95X::flow_array_program(JedecFile &file)
 		    }
 		  if ((o_data[0] & 0x03) == 0x01)
 		    break;
+		  wait_idle(20000, 50000);
 		}
 	      if (k == 32)
 		{
-		  fprintf(stderr, "failed\n");
+		  fprintf(stderr, "\nProgramming failed at sector %d (status %02x)\n",
+			  sec, o_data[0] & 0x03);
 		  return 1;
 		}
 	    }
+	  else
+	    jtag->cycleTCK(1);
 	}
       }
     }
@@ -212,6 +288,7 @@ void ProgAlgXC95X::flow_array_read(JedecFile &rbfile)
   unsigned char data;
   unsigned int idx=0;
 
+  memset(i_data, 0, sizeof(i_data)); /* only the address is set below */
   gettimeofday(tv, NULL);
   for(sec=0;sec < MaxSector;sec++)
     {
@@ -282,6 +359,7 @@ int ProgAlgXC95X::flow_array_verify(JedecFile &file)
   unsigned char data;
   unsigned int idx=0;
 
+  memset(i_data, 0, sizeof(i_data)); /* only the address is set below */
   gettimeofday(tv, NULL);
   for(sec=0;sec < MaxSector;sec++)
     {
@@ -360,9 +438,48 @@ void ProgAlgXC95X::array_read(JedecFile &file)
   flow_disable();
 }
 
-void ProgAlgXC95X::array_program(JedecFile &file)
+/* Returns 0 when the device erased and is blank. override_protect runs
+   iMPACT's protection override first (xc3sprog -O). */
+int ProgAlgXC95X::erase(bool override_protect)
 {
-  flow_array_program(file);
+  int ret = 0;
+  if (check_ir_capture())
+    return 1;
+  flow_enable();
+  if (override_protect)
+    ret = flow_erase_override();
+  if (ret == 0)
+    ret = flow_erase();
+  if (ret == 0)
+    ret = flow_blank_check();
+  if (ret)
+    flow_error_exit();
+  flow_disable();
+  return ret;
+}
+
+/* Returns 0 when the device is blank. */
+int ProgAlgXC95X::blank_check()
+{
+  int ret;
+  flow_enable();
+  ret = flow_blank_check();
+  flow_disable();
+  return ret;
+}
+
+/* Returns 0 when every sector programmed. */
+int ProgAlgXC95X::array_program(JedecFile &file)
+{
+  int ret;
+  if (check_ir_capture())
+    return 1;
+  flow_enable();
+  ret = flow_array_program(file);
+  if (ret)
+    flow_error_exit();
+  flow_disable();
+  return ret;
 }
 
 int ProgAlgXC95X::array_verify(JedecFile &file)
