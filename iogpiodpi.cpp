@@ -116,7 +116,7 @@ void IOGPIODPi::txrx_block(const unsigned char *tdi, unsigned char *tdo, int len
   int i=0;
   int j=0;
   unsigned char tdo_byte=0;
-  unsigned char tdi_byte;
+  unsigned char tdi_byte=0; /* no tdi: shift zeros (IOBase::shiftTDO) */
   if (tdi)
       tdi_byte = tdi[j];
       

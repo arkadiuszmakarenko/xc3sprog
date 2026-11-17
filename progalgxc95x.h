@@ -44,6 +44,7 @@ class ProgAlgXC95X
 
   Jtag *jtag;
   int DRegLength;
+  void wait_idle(int tck, unsigned int usec);
   void flow_enable();
   void flow_disable();
   void flow_error_exit();
@@ -51,14 +52,16 @@ class ProgAlgXC95X
   int flow_array_program(JedecFile &file);
   int flow_array_verify(JedecFile &file);
   int flow_blank_check();
-  void flow_erase();
+  int flow_erase();
  public:
   ProgAlgXC95X(Jtag &j, int s);
-  int blank_check(){flow_enable(); int ret= flow_blank_check(); flow_disable(); return ret;};
-  int erase(){flow_enable(); flow_erase(); return flow_blank_check();};
+  unsigned int fuseCount(){return 108*108*DRegLength;};
+  /* These return 0 on success. */
+  int blank_check();
+  int erase();
   int array_verify(JedecFile &file);
   void array_read(JedecFile &file);
-  void array_program(JedecFile &file);
+  int array_program(JedecFile &file);
 };
 
 

@@ -27,6 +27,7 @@ Dmitry Teytelman [dimtey@gmail.com] 14 Jun 2006 [applied 13 Aug 2006]:
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <list>
 #include <memory>
@@ -1346,9 +1347,13 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
     
     if (erase)
     {
-        alg.erase();
+        if (alg.erase())
+        {
+            fprintf(stderr, "Erase failed\n");
+            return 1;
+        }
     }
-    
+
     for (i = 0; i< argc; i++)
     {
         int ret = 0;
@@ -1393,16 +1398,51 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
         }
         else if (action == 'v' || tolower(action) == 'w') 
         {
-            jedecfile.readFile(jedecfile_fp);
+            /* Check the file before anything touches the device */
+            if (jedecfile.readFile(jedecfile_fp))
+            {
+                fprintf(stderr, "%s: not a valid JEDEC file\n", args[i]);
+                return 1;
+            }
+            if (jedecfile.getLength() != alg.fuseCount())
+            {
+                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[i],
+                        jedecfile.getLength(), device, alg.fuseCount());
+                return 1;
+            }
+            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
+            {
+                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
+                        args[i], jedecfile.getChecksum(),
+                        jedecfile.calcChecksum());
+                return 1;
+            }
+            if (jedecfile.getDevice()[0] &&
+                strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
+            {
+                fprintf(stderr, "%s is for a %s, the device is a %s\n",
+                        args[i], jedecfile.getDevice(), device);
+                return 1;
+            }
             if (action == 'w')
             {
                 if (!erase)
                 {
-                    ret = alg.erase();
+                    if (alg.erase())
+                    {
+                        fprintf(stderr, "Erase failed: not programming\n");
+                        return 1;
+                    }
                 }
 	    }
 	    if(tolower(action) == 'w')
-                alg.array_program(jedecfile);
+            {
+                if (alg.array_program(jedecfile))
+                {
+                    fprintf(stderr, "Programming failed\n");
+                    return 1;
+                }
+            }
             ret = alg.array_verify(jedecfile);
         }
         if(ret)
